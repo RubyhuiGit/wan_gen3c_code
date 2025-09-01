@@ -60,11 +60,9 @@ class TextVideoDataset(torch.utils.data.Dataset):
         reader.close()
 
         frames = torch.stack(frames, dim=0)
-        frames = rearrange(frames, "T C H W -> C T H W")
-        
+        frames = rearrange(frames, "T C H W -> C T H W")    # -1 - 1     
         first_frame = v2.functional.center_crop(first_frame, output_size=(self.height, self.width))
-        first_frame = np.array(first_frame)
-
+        first_frame = np.array(first_frame)   # 0-255
         return frames, first_frame
 
 

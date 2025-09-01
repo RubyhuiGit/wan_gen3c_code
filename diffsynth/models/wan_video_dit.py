@@ -280,7 +280,8 @@ class WanModel(torch.nn.Module):
         self.patch_size = patch_size
 
         self.patch_embedding = nn.Conv3d(
-            in_dim, dim, kernel_size=patch_size, stride=patch_size)
+            in_dim, dim, kernel_size=patch_size, stride=patch_size)  # 36, 5120, [1, 2, 2]
+        
         self.text_embedding = nn.Sequential(
             nn.Linear(text_dim, dim),
             nn.GELU(approximate='tanh'),
@@ -306,7 +307,15 @@ class WanModel(torch.nn.Module):
         self.has_image_pos_emb = has_image_pos_emb
 
     def patchify(self, x: torch.Tensor):
-        x = self.patch_embedding(x)
+        x = self.patch_embedding(x)         # torch.Size([1, 5120, 21, 30, 52])
+        grid_size = x.shape[2:]
+        x = rearrange(x, 'b c f h w -> b (f h w) c').contiguous()
+        return x, grid_size  # x, grid_size: (f, h, w)
+    
+    def patchify_control(self, x: torch.Tensor, control_feat: torch.Tensor):
+        x = self.patch_embedding(x)         # torch.Size([1, 5120, 21, 30, 52])
+        x = [u + v for u, v in zip(x, control_feat)]
+        x = x[0].unsqueeze(0)               # torch.Size([1, 5120, 21, 30, 52])
         grid_size = x.shape[2:]
         x = rearrange(x, 'b c f h w -> b (f h w) c').contiguous()
         return x, grid_size  # x, grid_size: (f, h, w)
@@ -326,6 +335,7 @@ class WanModel(torch.nn.Module):
                 y: Optional[torch.Tensor] = None,
                 use_gradient_checkpointing: bool = False,
                 use_gradient_checkpointing_offload: bool = False,
+                control_feat = None,
                 **kwargs,
                 ):
         t = self.time_embedding(
@@ -338,8 +348,11 @@ class WanModel(torch.nn.Module):
             clip_embdding = self.img_emb(clip_feature)
             context = torch.cat([clip_embdding, context], dim=1)
         
-        x, (f, h, w) = self.patchify(x)
-        
+        if control_feat is not None:
+            x, (f, h, w) = self.patchify_control(x, control_feat)
+        else:
+            x, (f, h, w) = self.patchify(x)
+
         freqs = torch.cat([
             self.freqs[0][:f].view(f, 1, 1, -1).expand(f, h, w, -1),
             self.freqs[1][:h].view(1, h, 1, -1).expand(f, h, w, -1),

@@ -12,4 +12,5 @@ from .pipeline_runner import SDVideoPipelineRunner
 from .hunyuan_video import HunyuanVideoPipeline
 from .step_video import StepVideoPipeline
 from .wan_video import WanVideoPipeline
+from .wan_video_3dcache_pipeline import WanVideo3dCachePipeline
 KolorsImagePipeline = SDXLImagePipeline
