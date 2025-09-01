@@ -379,6 +379,8 @@ class ModelManager:
             is_loaded = False
             if len(state_dict) == 0:
                 state_dict = load_state_dict(file_path)
+
+            # 处理 LoRA
             for model_name, model, model_path in zip(self.model_name, self.model, self.model_path):
                 for lora in get_lora_loaders():
                     match_results = lora.match(model, state_dict)

@@ -194,6 +194,15 @@ class WanVideo3dCachePipeline(BasePipeline):
             pipe.use_unified_sequence_parallel = True
         return pipe
     
+    def set_control_adaptor(self, ckpt_path, input_dim=64, out_dim=5120):
+        patch_size = self.dit.patch_size   # [1, 2, 2]
+        self.control_adaptor = SimpleAdapter(input_dim, out_dim, patch_size[1:], patch_size[1:])
+        checkpoint = torch.load(ckpt_path, map_location=torch.device('cpu'), weights_only=True)
+        self.control_adaptor.load_state_dict(checkpoint)
+        self.control_adaptor.eval()
+        for param in self.control_adaptor.parameters():
+            param.requires_grad = False 
+        print("Control Adaptor Load Succ!")
 
     def init_control_adaptor(self, input_dim=64, out_dim=5120):
         patch_size = self.dit.patch_size   # [1, 2, 2]
@@ -337,21 +346,13 @@ class WanVideo3dCachePipeline(BasePipeline):
             return latents, {"vace_context": vace_context, "vace_scale": vace_scale}
         else:
             return latents, {"vace_context": None, "vace_scale": vace_scale}
-
-
+    
     @torch.no_grad()
-    def __call__(
+    def infer(
         self,
         prompt,
         negative_prompt="",
-        input_image=None,
-        end_image=None,
-        input_video=None,
-        control_video=None,
-        vace_video=None,
-        vace_video_mask=None,
-        vace_reference_image=None,
-        vace_scale=1.0,
+        all_input=None,
         denoising_strength=1.0,
         seed=None,
         rand_device="cpu",
@@ -368,108 +369,85 @@ class WanVideo3dCachePipeline(BasePipeline):
         tea_cache_l1_thresh=None,
         tea_cache_model_id="",
         progress_bar_cmd=tqdm,
-        progress_bar_st=None,
     ):
-        # Parameter check
-        height, width = self.check_resize_height_width(height, width)
-        if num_frames % 4 != 1:
-            num_frames = (num_frames + 2) // 4 * 4 + 1
-            print(f"Only `num_frames % 4 == 1` is acceptable. We round it up to {num_frames}.")
+        # ...
+        pass
+
+
+        # if num_frames % 4 != 1:
+        #     num_frames = (num_frames + 2) // 4 * 4 + 1
+        #     print(f"Only `num_frames % 4 == 1` is acceptable. We round it up to {num_frames}.")
         
-        # Tiler parameters
-        tiler_kwargs = {"tiled": tiled, "tile_size": tile_size, "tile_stride": tile_stride}
+        # # Tiler parameters
+        # tiler_kwargs = {"tiled": tiled, "tile_size": tile_size, "tile_stride": tile_stride}
 
-        # Scheduler
-        self.scheduler.set_timesteps(num_inference_steps, denoising_strength=denoising_strength, shift=sigma_shift)
+        # # Scheduler
+        # self.scheduler.set_timesteps(num_inference_steps, denoising_strength=denoising_strength, shift=sigma_shift)
 
-        # Initialize noise
-        noise = self.generate_noise((1, 16, (num_frames - 1) // 4 + 1, height//8, width//8), seed=seed, device=rand_device, dtype=torch.float32)
-        noise = noise.to(dtype=self.torch_dtype, device=self.device)
-        if input_video is not None:
-            self.load_models_to_device(['vae'])
-            input_video = self.preprocess_images(input_video)
-            input_video = torch.stack(input_video, dim=2).to(dtype=self.torch_dtype, device=self.device)
-            latents = self.encode_video(input_video, **tiler_kwargs).to(dtype=self.torch_dtype, device=self.device)
-            latents = self.scheduler.add_noise(latents, noise, timestep=self.scheduler.timesteps[0])
-        else:
-            latents = noise
+        # # Initialize noise
+        # noise = self.generate_noise((1, 16, (num_frames - 1) // 4 + 1, height//8, width//8), seed=seed, device=rand_device, dtype=torch.float32)
+        # noise = noise.to(dtype=self.torch_dtype, device=self.device)
+        # latents = noise
         
-        # Encode prompts
-        self.load_models_to_device(["text_encoder"])
-        prompt_emb_posi = self.encode_prompt(prompt, positive=True)
-        if cfg_scale != 1.0:
-            prompt_emb_nega = self.encode_prompt(negative_prompt, positive=False)
+        # # Encode prompts
+        # self.load_models_to_device(["text_encoder"])
+        # prompt_emb_posi = self.encode_prompt(prompt, positive=True)
+        # if cfg_scale != 1.0:
+        #     prompt_emb_nega = self.encode_prompt(negative_prompt, positive=False)
             
-        # Encode image
-        if input_image is not None and self.image_encoder is not None:
-            self.load_models_to_device(["image_encoder", "vae"])
-            image_emb = self.encode_image(input_image, end_image, num_frames, height, width, **tiler_kwargs)
-        else:
-            image_emb = {}
+        # # Encode image
+        # if input_image is not None and self.image_encoder is not None:
+        #     self.load_models_to_device(["image_encoder", "vae"])
+        #     image_emb = self.encode_image(input_image, None, num_frames, height, width, **tiler_kwargs)
+        # else:
+        #     image_emb = {}
+
             
-        # ControlNet
-        if control_video is not None:
-            self.load_models_to_device(["image_encoder", "vae"])
-            image_emb = self.prepare_controlnet_kwargs(control_video, num_frames, height, width, **image_emb, **tiler_kwargs)
-            
-        # Motion Controller
-        if self.motion_controller is not None and motion_bucket_id is not None:
-            motion_kwargs = self.prepare_motion_bucket_id(motion_bucket_id)
-        else:
-            motion_kwargs = {}
-            
-        # Extra input
-        extra_input = self.prepare_extra_input(latents)
+        # # Extra input
+        # extra_input = {}
+
+        # vace_kwargs = {"vace_context": None, "vace_scale": vace_scale}
+
+        # # TeaCache
+        # tea_cache_posi = {"tea_cache": TeaCache(num_inference_steps, rel_l1_thresh=tea_cache_l1_thresh, model_id=tea_cache_model_id) if tea_cache_l1_thresh is not None else None}
+        # tea_cache_nega = {"tea_cache": TeaCache(num_inference_steps, rel_l1_thresh=tea_cache_l1_thresh, model_id=tea_cache_model_id) if tea_cache_l1_thresh is not None else None}
         
-        # VACE
-        latents, vace_kwargs = self.prepare_vace_kwargs(
-            latents, vace_video, vace_video_mask, vace_reference_image, vace_scale,
-            height=height, width=width, num_frames=num_frames, seed=seed, rand_device=rand_device, **tiler_kwargs
-        )
-        
-        # TeaCache
-        tea_cache_posi = {"tea_cache": TeaCache(num_inference_steps, rel_l1_thresh=tea_cache_l1_thresh, model_id=tea_cache_model_id) if tea_cache_l1_thresh is not None else None}
-        tea_cache_nega = {"tea_cache": TeaCache(num_inference_steps, rel_l1_thresh=tea_cache_l1_thresh, model_id=tea_cache_model_id) if tea_cache_l1_thresh is not None else None}
-        
-        # Unified Sequence Parallel
-        usp_kwargs = self.prepare_unified_sequence_parallel()
+        # # Unified Sequence Parallel
+        # usp_kwargs = self.prepare_unified_sequence_parallel()
 
-        # Denoise
-        self.load_models_to_device(["dit", "motion_controller", "vace"])
-        for progress_id, timestep in enumerate(progress_bar_cmd(self.scheduler.timesteps)):
-            timestep = timestep.unsqueeze(0).to(dtype=self.torch_dtype, device=self.device)
+        # # Denoise
+        # self.load_models_to_device(["dit", "motion_controller", "vace"])
+        # for progress_id, timestep in enumerate(progress_bar_cmd(self.scheduler.timesteps)):
+        #     timestep = timestep.unsqueeze(0).to(dtype=self.torch_dtype, device=self.device)
 
-            # Inference
-            noise_pred_posi = model_fn_wan_video(
-                self.dit, motion_controller=self.motion_controller, vace=self.vace,
-                x=latents, timestep=timestep,
-                **prompt_emb_posi, **image_emb, **extra_input,
-                **tea_cache_posi, **usp_kwargs, **motion_kwargs, **vace_kwargs,
-            )
-            if cfg_scale != 1.0:
-                noise_pred_nega = model_fn_wan_video(
-                    self.dit, motion_controller=self.motion_controller, vace=self.vace,
-                    x=latents, timestep=timestep,
-                    **prompt_emb_nega, **image_emb, **extra_input,
-                    **tea_cache_nega, **usp_kwargs, **motion_kwargs, **vace_kwargs,
-                )
-                noise_pred = noise_pred_nega + cfg_scale * (noise_pred_posi - noise_pred_nega)
-            else:
-                noise_pred = noise_pred_posi
+        #     # Inference
+        #     noise_pred_posi = model_fn_wan_video(
+        #         self.dit, motion_controller=self.motion_controller, vace=self.vace,
+        #         x=latents, timestep=timestep,
+        #         **prompt_emb_posi, **image_emb, **extra_input,
+        #         **tea_cache_posi, **usp_kwargs, **motion_kwargs, **vace_kwargs,
+        #     )
+        #     if cfg_scale != 1.0:
+        #         noise_pred_nega = model_fn_wan_video(
+        #             self.dit, motion_controller=self.motion_controller, vace=self.vace,
+        #             x=latents, timestep=timestep,
+        #             **prompt_emb_nega, **image_emb, **extra_input,
+        #             **tea_cache_nega, **usp_kwargs, **motion_kwargs, **vace_kwargs,
+        #         )
+        #         noise_pred = noise_pred_nega + cfg_scale * (noise_pred_posi - noise_pred_nega)
+        #     else:
+        #         noise_pred = noise_pred_posi
 
-            # Scheduler
-            latents = self.scheduler.step(noise_pred, self.scheduler.timesteps[progress_id], latents)
-            
-        if vace_reference_image is not None:
-            latents = latents[:, :, 1:]
+        #     # Scheduler
+        #     latents = self.scheduler.step(noise_pred, self.scheduler.timesteps[progress_id], latents)
 
-        # Decode
-        self.load_models_to_device(['vae'])
-        frames = self.decode_video(latents, **tiler_kwargs)
-        self.load_models_to_device([])
-        frames = self.tensor2video(frames[0])
+        # # Decode
+        # self.load_models_to_device(['vae'])
+        # frames = self.decode_video(latents, **tiler_kwargs)
+        # self.load_models_to_device([])
+        # frames = self.tensor2video(frames[0])
 
-        return frames
+        # return frames
 
 
 

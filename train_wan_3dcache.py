@@ -28,17 +28,9 @@ class LightningModelForDataProcess(pl.LightningModule):
         self.tiler_kwargs = {"tiled": tiled, "tile_size": tile_size, "tile_stride": tile_stride}
         
     def test_step(self, batch, batch_idx):
-         
-        # pixel_values torch.Size([1, 81, 3, 480, 832])
-        # target_intrinsic torch.Size([1, 81, 3, 3])
-        # target_w2c torch.Size([1, 81, 4, 4])
-        # text ['Normal video']
-        # data_type ['video']
-        # idx torch.Size([1])
-        # file_name ['/root/autodl-tmp/10_K/10K_1']
-        
-        cache_frames = batch["cache_frames"]          #     torch.Size([1, 2, 3, 480, 832])
-        cache_depth = batch["cache_depth"]            #     torch.Size([1, 2, 1, 480, 832])
+                 
+        cache_frames = batch["cache_frames"]          #     torch.Size([1, 2, 3, 480, 640])
+        cache_depth = batch["cache_depth"]            #     torch.Size([1, 2, 1, 480, 640])
         cache_intrinsic = batch["cache_intrinsic"]    #     torch.Size([1, 2, 3, 3])
         cache_w2c = batch["cache_w2c"]                #     torch.Size([1, 2, 4, 4]) 
 
@@ -56,18 +48,18 @@ class LightningModelForDataProcess(pl.LightningModule):
         target_w2c = batch["target_w2c"]             # torch.Size([1, 81, 3, 3])
         target_intrinsic = batch["target_intrinsic"] # target_w2c torch.Size([1, 81, 4, 4])
 
-        # torch.Size([1, 81, 2, 3, 480, 832]) torch.Size([1, 81, 2, 1, 480, 832])  （-1，1）
+        # torch.Size([1, 81, 2, 3, 480, 640]) torch.Size([1, 81, 2, 1, 480, 640])  （-1，1）
         render_imgs, render_masks = cache.render_cache(
             target_w2c,
             target_intrinsic,
             start_frame_idx=0,
             )
         first_frame = batch['pixel_values'][0][0].permute(1, 2, 0).contiguous()
-        first_frame = (first_frame * 0.5 + 0.5) * 255    # torch.Size([480, 832, 3])
+        first_frame = (first_frame * 0.5 + 0.5) * 255    # torch.Size([480, 640, 3])
 
         # if True:
         #     # 保存原始图像
-        #     cur_imgs = batch['pixel_values'][0].clone().detach() # (81, 3, 480, 832)
+        #     cur_imgs = batch['pixel_values'][0].clone().detach()
         #     cur_imgs = (cur_imgs * 0.5 + 0.5) * 255.0
         #     cur_imgs = cur_imgs.permute(0, 2, 3, 1)
         #     view_images = cur_imgs.cpu().numpy().astype(np.uint8)
@@ -75,7 +67,7 @@ class LightningModelForDataProcess(pl.LightningModule):
         #     imageio.mimsave(f"{args.output_path}/origin_img.gif", view_images, fps=10)
 
         #     # 保存render image
-        #     cur_render_image = render_imgs[0].clone().detach()    # (81, 2, 3, 480, 832)
+        #     cur_render_image = render_imgs[0].clone().detach()
         #     cur_render_image = (cur_render_image * 0.5 + 0.5) * 255.0
         #     B, N, C, H, W = cur_render_image.shape
         #     cur_render_image = cur_render_image.reshape(B * N, C, H, W)
@@ -85,12 +77,12 @@ class LightningModelForDataProcess(pl.LightningModule):
         #     imageio.mimsave(f"{args.output_path}/render.gif", view_images, fps=10)
 
         #     # 保存mask
-        #     cur_render_mask = render_masks[0].clone().detach()    # (81, 2, 1, 480, 832)
+        #     cur_render_mask = render_masks[0].clone().detach()
         #     cur_render_mask = cur_render_mask > 0.5
         #     B, N, C, H, W = cur_render_mask.shape
         #     cur_render_mask = cur_render_mask.reshape(B*N, C, H, W)
         #     cur_render_mask = cur_render_mask.permute(0, 2, 3, 1)
-        #     view_mask = (cur_render_mask.cpu().numpy() * 255).astype(np.uint8)     # (162, 480, 832, 1)
+        #     view_mask = (cur_render_mask.cpu().numpy() * 255).astype(np.uint8)
         #     view_mask_rgb = np.tile(view_mask, (1, 1, 1, 3))
         #     imageio.mimsave(f"{args.output_path}/render_mask.gif", view_mask_rgb, fps=10)
 
@@ -99,31 +91,29 @@ class LightningModelForDataProcess(pl.LightningModule):
         #     Image.fromarray(np.uint8(view_clip_img.cpu().numpy())).save(f"{args.output_path}/first_frame.png")
 
         text, video, path = batch["text"][0], batch["pixel_values"], batch["file_name"][0]
-        video = video.permute(0, 2, 1, 3, 4)    # torch.Size([1, 3, 81, 480, 832])
+        video = video.permute(0, 2, 1, 3, 4)    # torch.Size([1, 3, 81, 480, 640])
 
         self.pipe.device = self.device
         if video is not None:
             # 1、prompt 文本编码
             prompt_emb = self.pipe.encode_prompt(text)     # prompt_emb['context']  torch.Size([1, 512, 4096])
             # 2、video vae
-            video = video.to(dtype=self.pipe.torch_dtype, device=self.pipe.device)   # torch.Size([1, 3, 81, 480, 832])
-            latents = self.pipe.encode_video(video, **self.tiler_kwargs)[0]          # torch.Size([16, 21, 60, 104])   21是时间维度 16是特征维度
+            video = video.to(dtype=self.pipe.torch_dtype, device=self.pipe.device)   # torch.Size([1, 3, 81, 480, 640])
+            latents = self.pipe.encode_video(video, **self.tiler_kwargs)[0]          # torch.Size([16, 21, 60, 80])   21是时间维度 16是特征维度
 
             # 3、首帧编码
             first_frame = Image.fromarray(np.uint8(first_frame.cpu().numpy()))
             _, _, num_frames, height, width = video.shape
             # image_emb["clip_feature"]  torch.Size([1, 257, 1280]) 
-            # image_emb["y"] torch.Size([1, 20, 21, 60, 104])
+            # image_emb["y"] torch.Size([1, 20, 21, 60, 80])
             image_emb = self.pipe.encode_image(first_frame, None, num_frames, height, width)
 
             # 4、render image & render mask vae
             mask_pixel_values = []
             masks = []
             for i in range(render_imgs.shape[2]):
-                i_render_img = render_imgs[:, :, i, :, : :]           # torch.Size([1, 81, 3, 480, 832])
-                i_render_mask = render_masks[:, :, i, :, :, :]        # torch.Size([1, 81, 1, 480, 832])
-
-                print("i", i_render_img.shape, i_render_mask.shape)
+                i_render_img = render_imgs[:, :, i, :, : :]           # torch.Size([1, 81, 3, 480, 640])
+                i_render_mask = render_masks[:, :, i, :, :, :]        # torch.Size([1, 81, 1, 480, 640])
                 mask_pixel_values.append(i_render_img)
                 masks.append(i_render_mask)
 
@@ -133,16 +123,17 @@ class LightningModelForDataProcess(pl.LightningModule):
 
                 render_pixel = render_pixel.permute(0, 2, 1, 3, 4)
                 render_mask = render_mask.permute(0, 2, 1, 3, 4)
-                render_pixel = render_pixel.to(dtype=self.pipe.torch_dtype, device=self.pipe.device)  # torch.Size([1, 3, 81, 480, 832])
-                render_mask = render_mask.to(dtype=self.pipe.torch_dtype, device=self.pipe.device)    # torch.Size([1, 3, 81, 480, 832])
+                render_pixel = render_pixel.to(dtype=self.pipe.torch_dtype, device=self.pipe.device)  # torch.Size([1, 3, 81, 480, 640])
+                render_mask = render_mask.to(dtype=self.pipe.torch_dtype, device=self.pipe.device)    # torch.Size([1, 3, 81, 480, 640])
 
-                # torch.Size([16, 21, 60, 104])  torch.Size([16, 21, 60, 104])
+                # torch.Size([16, 21, 60, 80])  torch.Size([16, 21, 60, 80])
                 mask_pixel_latents = self.pipe.encode_video(render_pixel, **self.tiler_kwargs)[0]
                 mask_latents = self.pipe.encode_video(render_mask, **self.tiler_kwargs)[0]
 
                 latent_condition.append(mask_pixel_latents)
                 latent_condition.append(mask_latents)
-            render_control_latents = torch.cat(latent_condition, dim=0)  # torch.Size([64, 21, 60, 104])
+            render_control_latents = torch.cat(latent_condition, dim=0)  # torch.Size([64, 21, 60, 80])
+
             data = {
                 "latents": latents, 
                 "prompt_emb": prompt_emb, 
@@ -202,8 +193,6 @@ class LightningModelForTrain(pl.LightningModule):
         else:
             self.pipe.denoising_model().requires_grad_(True)
 
-        patch_size = self.pipe.denoising_model().patch_size   # [1, 2, 2]
-
         self.pipe.init_control_adaptor()
 
         self.learning_rate = learning_rate
@@ -250,17 +239,17 @@ class LightningModelForTrain(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         # Data
-        latents = batch["latents"].to(self.device)     # torch.Size([1, 16, 21, 60, 104]) 
+        latents = batch["latents"].to(self.device)     # torch.Size([1, 16, 21, 60, 80]) 
         prompt_emb = batch["prompt_emb"]
         prompt_emb["context"] = prompt_emb["context"][0].to(self.device)  # torch.Size([1, 512, 4096])
         image_emb = batch["image_emb"]
         if "clip_feature" in image_emb:
             image_emb["clip_feature"] = image_emb["clip_feature"][0].to(self.device)  # torch.Size([1, 257, 1280])
         if "y" in image_emb:
-            image_emb["y"] = image_emb["y"][0].to(self.device)    # torch.Size([1, 20, 21, 60, 104])
+            image_emb["y"] = image_emb["y"][0].to(self.device)    # torch.Size([1, 20, 21, 60, 80])
 
-        render_latents = batch["render_control_latents"].to(self.device)  # torch.Size([1, 64, 21, 60, 104])
-        render_latents_feat = self.pipe.control_adaptor(render_latents)    # torch.Size([1, 5120, 21, 30, 52])
+        render_latents = batch["render_control_latents"].to(self.device)  # torch.Size([1, 64, 21, 60, 80])
+        render_latents_feat = self.pipe.control_adaptor(render_latents)    # torch.Size([1, 5120, 21, 30, 40])
 
         # Loss
         self.pipe.device = self.device
@@ -281,11 +270,23 @@ class LightningModelForTrain(pl.LightningModule):
         loss = torch.nn.functional.mse_loss(noise_pred.float(), training_target.float())
         loss = loss * self.pipe.scheduler.training_weight(timestep)
 
+        # # 打印所有训练的参数
+        # test_file_path = open("/root/test.json", 'a')
+        # for name, param in self.named_parameters():
+        #     if param.requires_grad:
+        #         print(f"Name: {name}, Shape: {param.shape}, train: {param.requires_grad}", file=test_file_path)
+        # for name, param in self.pipe.denoising_model().named_parameters():
+        #     if param.requires_grad:
+        #         print(f"Name: {name}, Shape: {param.shape}, train: {param.requires_grad}", file=test_file_path)
+        # for name, param in self.pipe.get_control_adaptor().named_parameters():
+        #     if param.requires_grad:
+        #         print(f"Name: {name}, Shape: {param.shape}, train: {param.requires_grad}", file=test_file_path)
+
         # Record log
         self.log("train_loss", loss, prog_bar=True)
         return loss
 
-    # 重新写 & debug看保存参数
+    # 配置优化器
     def configure_optimizers(self):
         trainable_denoise_params = filter(lambda p: p.requires_grad, self.pipe.denoising_model().parameters())
         trainable_control_adaptor_params = filter(lambda p: p.requires_grad, self.pipe.get_control_adaptor().parameters())
@@ -293,7 +294,7 @@ class LightningModelForTrain(pl.LightningModule):
         optimizer = torch.optim.AdamW(all_trainable_params, lr=self.learning_rate)
         return optimizer
     
-    # 重新写
+    # 保存
     def on_save_checkpoint(self, checkpoint):
         checkpoint.clear()
         trainable_param_names = list(filter(lambda named_param: named_param[1].requires_grad, self.pipe.denoising_model().named_parameters()))
@@ -303,15 +304,14 @@ class LightningModelForTrain(pl.LightningModule):
         for name, param in state_dict.items():
             if name in trainable_param_names:
                 lora_state_dict[name] = param
-
-        trainable_adaptor_param_names = list(filter(lambda named_param: named_param[1].requires_grad, self.pipe.get_control_adaptor().named_parameters()))
-        trainable_adaptor_param_names = set([named_param[0] for named_param in trainable_adaptor_param_names])
-        state_dict = self.pipe.get_control_adaptor().state_dict()
-        for name, param in state_dict.items():
-            if name in trainable_adaptor_param_names:
-                lora_state_dict[name] = param
         checkpoint.update(lora_state_dict)
 
+        # 保存control adaptor
+        adaptor_state_dict = self.pipe.get_control_adaptor().state_dict()
+        checkpoint_dir = self.trainer.checkpoint_callback.dirpath
+        os.makedirs(checkpoint_dir, exist_ok=True)
+        adaptor_save_path = os.path.join(checkpoint_dir, f"control_adaptor_step_{self.global_step}.ckpt")
+        torch.save(adaptor_state_dict, adaptor_save_path)
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Simple example of a training script.")
@@ -522,7 +522,6 @@ def data_process(args):
         video_sample_n_frames=args.num_frames,
         sample_size=(args.height, args.width)
     )
-    dataset.__getitem__(0)
     dataloader = torch.utils.data.DataLoader(
         dataset,
         shuffle=False,

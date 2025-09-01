@@ -5,7 +5,7 @@ import os
 import json
 import random
 import torchvision.transforms as transforms
-
+from PIL import Image
 from .data_utils.dataset_10k_parse import Dataset10KParse
 
 class Dataset10K(torch.utils.data.Dataset):
@@ -72,7 +72,7 @@ class Dataset10K(torch.utils.data.Dataset):
         batch_index = np.linspace(start_idx, start_idx + clip_length - 1, min_sample_n_frames, dtype=int)
 
         dataset_10k_parse_tools = Dataset10KParse(dataset_dir)
-        data_info = dataset_10k_parse_tools.parse(batch_index, self.sample_size)
+        data_info = dataset_10k_parse_tools.parse(batch_index, True)
         del dataset_10k_parse_tools
 
         final_info = {}
@@ -98,6 +98,9 @@ class Dataset10K(torch.utils.data.Dataset):
             pixel_values = self.video_transforms(pixel_values)    # -1, 1之间
 
             cache_frames = torch.stack([pixel_values[0], pixel_values[-1]], dim=0)   # 用于cache_3d的构建
+
+            print(pixel_values.shape)
+
 
             # 去掉首尾的视频
             final_info["pixel_values"] = pixel_values
@@ -134,3 +137,65 @@ class Dataset10K(torch.utils.data.Dataset):
                 print(e, self.dataset[idx % len(self.dataset)])
                 idx = random.randint(0, self.length-1)
         return sample
+
+
+class Dataset10KTestInfo():
+    def __init__(
+        self,
+        data_root=None,
+    ):  
+        self.data_root = data_root
+        self.video_transforms = transforms.Compose(
+            [   
+                transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True),
+            ]
+        )
+    
+    def get_data_dict(self, select_index=None, text=""):
+        dataset_10k_parse_tools = Dataset10KParse(self.data_root)
+        select_index = np.linspace(0, 300, 81, dtype=int)
+        data_info = dataset_10k_parse_tools.parse(select_index, True)
+        del dataset_10k_parse_tools
+
+        final_info = {}
+        if data_info == None:
+            print("Parse File Failed:", dataset_dir)
+            raise ValueError(f"Parse Error, Check you dataset {dataset_dir}")
+        else:
+            start_c2w, end_c2w = data_info["c2w"][0].copy(), data_info["c2w"][-1].copy()
+            start_w2c, end_w2c = data_info["w2c"][0].copy(), data_info["w2c"][-1].copy()
+            start_intrinsic, end_intrinsic = data_info["intrinsics"][0].copy(), data_info["intrinsics"][-1].copy()
+            start_depth, end_depth = data_info["depth"][0].copy(), data_info["depth"][-1].copy()
+
+            cache_depth = np.expand_dims(np.stack([start_depth, end_depth], axis=0), axis=1)
+            cache_intrinsic = np.stack([start_intrinsic, end_intrinsic], axis=0)  # (B, 3, 3)
+            cache_w2c = np.stack([start_w2c, end_w2c], axis=0)    # (B, 4, 4)
+
+            pixel_values = data_info["frames"]
+            target_w2c = data_info["w2c"]
+            target_intrinsic = data_info["intrinsics"]
+
+            pixel_values = torch.from_numpy(pixel_values).permute(0, 3, 1, 2).contiguous()
+            pixel_values = pixel_values / 255.
+            pixel_values = self.video_transforms(pixel_values)    # -1, 1之间
+
+            cache_frames = torch.stack([pixel_values[0], pixel_values[-1]], dim=0)   # 用于cache_3d的构建
+
+            first_frame = pixel_values[0].permute(1, 2, 0).contiguous()
+            first_frame = (first_frame * 0.5 + 0.5) * 255
+            first_frame = Image.fromarray(np.uint8(first_frame.cpu().numpy()))
+
+            # 去掉首尾的视频
+            final_info["first_frame"] = first_frame
+            final_info["target_intrinsic"] = target_intrinsic
+            final_info["target_w2c"] = target_w2c
+            # 用于构建cache_3d的信息
+            final_info["cache_frames"] = cache_frames
+            final_info["cache_depth"] = cache_depth
+            final_info["cache_intrinsic"] = cache_intrinsic
+            final_info["cache_w2c"] = cache_w2c
+
+        final_info["text"] = text
+
+        return final_info
+

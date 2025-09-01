@@ -22,10 +22,10 @@ class SimpleAdapter(nn.Module):
         x = x.permute(0, 2, 1, 3, 4).contiguous().view(bs * f, c, h, w)
 
         # Convolution operation
-        x_conv = self.conv(x)      # torch.Size([21, 64, 60, 104]) torch.Size([21, 5120, 30, 52])
-
+        x_conv = self.conv(x)      # torch.Size([21, 64, 60, 80]) torch.Size([21, 5120, 30, 40])
+ 
         # Feature extraction with residual blocks
-        out = self.residual_blocks(x_conv)     # torch.Size([21, 5120, 30, 52])
+        out = self.residual_blocks(x_conv)     # torch.Size([21, 5120, 30, 40])
 
         # Reshape to restore original bf dimension
         out = out.view(bs, f, out.size(1), out.size(2), out.size(3))
