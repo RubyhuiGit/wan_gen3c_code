@@ -370,84 +370,109 @@ class WanVideo3dCachePipeline(BasePipeline):
         tea_cache_model_id="",
         progress_bar_cmd=tqdm,
     ):
-        # ...
-        pass
+        if all_input is None:
+            raise ValueError(f"Input Data Error!")
 
-
-        # if num_frames % 4 != 1:
-        #     num_frames = (num_frames + 2) // 4 * 4 + 1
-        #     print(f"Only `num_frames % 4 == 1` is acceptable. We round it up to {num_frames}.")
+        _, num_frames, _, _, H, W = all_input["render_imgs"].shape
+        if num_frames % 4 != 1:
+            num_frames = (num_frames + 2) // 4 * 4 + 1
+            print(f"Only `num_frames % 4 == 1` is acceptable. We round it up to {num_frames}.")
         
-        # # Tiler parameters
-        # tiler_kwargs = {"tiled": tiled, "tile_size": tile_size, "tile_stride": tile_stride}
+        # Scheduler
+        self.scheduler.set_timesteps(num_inference_steps, denoising_strength=denoising_strength, shift=sigma_shift)
 
-        # # Scheduler
-        # self.scheduler.set_timesteps(num_inference_steps, denoising_strength=denoising_strength, shift=sigma_shift)
+        # 1、Initialize noise
+        noise = self.generate_noise((1, 16, (num_frames - 1) // 4 + 1, H//8, W//8), seed=seed, device=rand_device, dtype=torch.float32)
+        noise = noise.to(dtype=self.torch_dtype, device=self.device)
+        latents = noise        # torch.Size([1, 16, 21, 60, 80])
 
-        # # Initialize noise
-        # noise = self.generate_noise((1, 16, (num_frames - 1) // 4 + 1, height//8, width//8), seed=seed, device=rand_device, dtype=torch.float32)
-        # noise = noise.to(dtype=self.torch_dtype, device=self.device)
-        # latents = noise
-        
-        # # Encode prompts
-        # self.load_models_to_device(["text_encoder"])
-        # prompt_emb_posi = self.encode_prompt(prompt, positive=True)
-        # if cfg_scale != 1.0:
-        #     prompt_emb_nega = self.encode_prompt(negative_prompt, positive=False)
-            
-        # # Encode image
-        # if input_image is not None and self.image_encoder is not None:
-        #     self.load_models_to_device(["image_encoder", "vae"])
-        #     image_emb = self.encode_image(input_image, None, num_frames, height, width, **tiler_kwargs)
-        # else:
-        #     image_emb = {}
+        # 2、prompt编码
+        self.load_models_to_device(["text_encoder"])
+        prompt_emb_posi = self.encode_prompt(prompt, positive=True)      # context torch.Size([1, 512, 4096])
+        if cfg_scale != 1.0:
+            prompt_emb_nega = self.encode_prompt(negative_prompt, positive=False)
 
-            
-        # # Extra input
-        # extra_input = {}
+        # 3、 首帧编码
+        first_frame = all_input["first_frame"]
+        self.load_models_to_device(["image_encoder", "vae"])
+        image_emb = self.encode_image(first_frame, None, num_frames, H, W)  
+        # clip_feature torch.Size([1, 257, 1280])
+        # y torch.Size([1, 20, 21, 60, 80])
 
-        # vace_kwargs = {"vace_context": None, "vace_scale": vace_scale}
+        tiler_kwargs = {"tiled": True, "tile_size": (34, 34), "tile_stride": (18, 16)}
 
-        # # TeaCache
-        # tea_cache_posi = {"tea_cache": TeaCache(num_inference_steps, rel_l1_thresh=tea_cache_l1_thresh, model_id=tea_cache_model_id) if tea_cache_l1_thresh is not None else None}
-        # tea_cache_nega = {"tea_cache": TeaCache(num_inference_steps, rel_l1_thresh=tea_cache_l1_thresh, model_id=tea_cache_model_id) if tea_cache_l1_thresh is not None else None}
-        
-        # # Unified Sequence Parallel
-        # usp_kwargs = self.prepare_unified_sequence_parallel()
+        # 4、render latents
+        render_imgs = all_input["render_imgs"]
+        render_masks = all_input["render_masks"]
+        mask_pixel_values = []
+        masks = []
+        for i in range(render_imgs.shape[2]):
+            i_render_img = render_imgs[:, :, i, :, : :]           # torch.Size([1, 81, 3, 480, 640])
+            i_render_mask = render_masks[:, :, i, :, :, :]        # torch.Size([1, 81, 1, 480, 640])
+            mask_pixel_values.append(i_render_img)
+            masks.append(i_render_mask)
 
-        # # Denoise
-        # self.load_models_to_device(["dit", "motion_controller", "vace"])
-        # for progress_id, timestep in enumerate(progress_bar_cmd(self.scheduler.timesteps)):
-        #     timestep = timestep.unsqueeze(0).to(dtype=self.torch_dtype, device=self.device)
+        latent_condition = []
+        for i, (render_pixel, render_mask) in enumerate(zip(mask_pixel_values, masks)):
+            render_mask = render_mask.repeat(1, 1, 3, 1, 1)          # torch.Size([1, 81, 3, 480, 832])
 
-        #     # Inference
-        #     noise_pred_posi = model_fn_wan_video(
-        #         self.dit, motion_controller=self.motion_controller, vace=self.vace,
-        #         x=latents, timestep=timestep,
-        #         **prompt_emb_posi, **image_emb, **extra_input,
-        #         **tea_cache_posi, **usp_kwargs, **motion_kwargs, **vace_kwargs,
-        #     )
-        #     if cfg_scale != 1.0:
-        #         noise_pred_nega = model_fn_wan_video(
-        #             self.dit, motion_controller=self.motion_controller, vace=self.vace,
-        #             x=latents, timestep=timestep,
-        #             **prompt_emb_nega, **image_emb, **extra_input,
-        #             **tea_cache_nega, **usp_kwargs, **motion_kwargs, **vace_kwargs,
-        #         )
-        #         noise_pred = noise_pred_nega + cfg_scale * (noise_pred_posi - noise_pred_nega)
-        #     else:
-        #         noise_pred = noise_pred_posi
+            render_pixel = render_pixel.permute(0, 2, 1, 3, 4)
+            render_mask = render_mask.permute(0, 2, 1, 3, 4)
+            render_pixel = render_pixel.to(dtype=self.torch_dtype, device=self.device)  # torch.Size([1, 3, 81, 480, 640])
+            render_mask = render_mask.to(dtype=self.torch_dtype, device=self.device)    # torch.Size([1, 3, 81, 480, 640])
 
-        #     # Scheduler
-        #     latents = self.scheduler.step(noise_pred, self.scheduler.timesteps[progress_id], latents)
+            # torch.Size([16, 21, 60, 80])  torch.Size([16, 21, 60, 80])
+            mask_pixel_latents = self.encode_video(render_pixel, **tiler_kwargs)[0]
+            mask_latents = self.encode_video(render_mask, **tiler_kwargs)[0]
 
-        # # Decode
-        # self.load_models_to_device(['vae'])
-        # frames = self.decode_video(latents, **tiler_kwargs)
-        # self.load_models_to_device([])
-        # frames = self.tensor2video(frames[0])
+            latent_condition.append(mask_pixel_latents)
+            latent_condition.append(mask_latents)
 
-        # return frames
+        render_control_latents = torch.cat(latent_condition, dim=0).unsqueeze(0) # torch.Size([1, 64, 21, 60, 80])
+        self.control_adaptor.to(self.device, dtype=self.torch_dtype)
+        render_control_latents = render_control_latents.to(self.device, dtype=self.torch_dtype)
+        render_latents_feat = self.control_adaptor(render_control_latents)       # torch.Size([1, 5120, 21, 30, 40])
+
+        extra_input = {}
+        # TeaCache
+        tea_cache_posi = {"tea_cache": TeaCache(num_inference_steps, rel_l1_thresh=tea_cache_l1_thresh, model_id=tea_cache_model_id) if tea_cache_l1_thresh is not None else None}
+        tea_cache_nega = {"tea_cache": TeaCache(num_inference_steps, rel_l1_thresh=tea_cache_l1_thresh, model_id=tea_cache_model_id) if tea_cache_l1_thresh is not None else None}
+        # Unified Sequence Parallel
+        usp_kwargs = self.prepare_unified_sequence_parallel()
+
+        # Denoise
+        self.load_models_to_device(["dit", "motion_controller", "vace"])
+        for progress_id, timestep in enumerate(progress_bar_cmd(self.scheduler.timesteps)):
+            timestep = timestep.unsqueeze(0).to(dtype=self.torch_dtype, device=self.device)
+
+            # Inference
+            noise_pred_posi = model_fn_wan_video(
+                self.dit, motion_controller=self.motion_controller, vace=self.vace,
+                x=latents, timestep=timestep, control_feat=render_latents_feat,
+                **prompt_emb_posi, **image_emb, **extra_input,
+                **tea_cache_posi, **usp_kwargs
+            )
+            if cfg_scale != 1.0:
+                noise_pred_nega = model_fn_wan_video(
+                    self.dit, motion_controller=self.motion_controller, vace=self.vace,
+                    x=latents, timestep=timestep, control_feat=render_latents_feat,
+                    **prompt_emb_nega, **image_emb, **extra_input,
+                    **tea_cache_nega, **usp_kwargs
+                )
+                noise_pred = noise_pred_nega + cfg_scale * (noise_pred_posi - noise_pred_nega)
+            else:
+                noise_pred = noise_pred_posi
+
+            # Scheduler
+            latents = self.scheduler.step(noise_pred, self.scheduler.timesteps[progress_id], latents)
+
+        # Decode
+        self.load_models_to_device(['vae'])
+        frames = self.decode_video(latents, **tiler_kwargs)
+        self.load_models_to_device([])
+        frames = self.tensor2video(frames[0])
+
+        return frames
 
 
 
@@ -518,6 +543,7 @@ def model_fn_wan_video(
     tea_cache: TeaCache = None,
     use_unified_sequence_parallel: bool = False,
     motion_bucket_id: Optional[torch.Tensor] = None,
+    control_feat: torch.Tensor = None,
     **kwargs,
 ):
     if use_unified_sequence_parallel:
@@ -537,7 +563,8 @@ def model_fn_wan_video(
         clip_embdding = dit.img_emb(clip_feature)
         context = torch.cat([clip_embdding, context], dim=1)
     
-    x, (f, h, w) = dit.patchify(x)
+    # x, (f, h, w) = dit.patchify(x)
+    x, (f, h, w) = dit.patchify(x, control_feat)
     
     freqs = torch.cat([
         dit.freqs[0][:f].view(f, 1, 1, -1).expand(f, h, w, -1),

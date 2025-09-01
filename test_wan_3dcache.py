@@ -62,14 +62,12 @@ def render_proc(test_info):
 
 render_proc(test_info)
 
-# video = pipe.infer(
-#     prompt="Clear picture",
-#     negative_prompt="色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走",
-#     all_input=test_info,
-#     num_inference_steps=50,
-#     seed=0, tiled=True
-#     height=480,
-#     width=640
-# )
-# video_name = os.path.join(save_dir, "infer.mp4")
-# save_video(video, video_name, fps=15, quality=5)
+video = pipe.infer(
+    prompt="清晰的视频",
+    negative_prompt="色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走",
+    all_input=test_info,
+    num_inference_steps=50,
+    seed=0, tiled=True
+)
+video_name = "/root/test.mp4"
+save_video(video, video_name, fps=15, quality=5)
