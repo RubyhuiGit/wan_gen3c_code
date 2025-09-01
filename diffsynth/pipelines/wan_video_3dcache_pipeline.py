@@ -564,7 +564,7 @@ def model_fn_wan_video(
         context = torch.cat([clip_embdding, context], dim=1)
     
     # x, (f, h, w) = dit.patchify(x)
-    x, (f, h, w) = dit.patchify(x, control_feat)
+    x, (f, h, w) = dit.patchify_control(x, control_feat)
     
     freqs = torch.cat([
         dit.freqs[0][:f].view(f, 1, 1, -1).expand(f, h, w, -1),
